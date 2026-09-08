@@ -73,7 +73,7 @@ resolve_sing_box_version() {
     case "$SING_BOX_VERSION" in
       ""|*[!0-9.]*) die "sing-box 版本格式不正确：${SING_BOX_VERSION}" ;;
     esac
-    SING_BOX_RELEASE_TAG="v${SING_BOX_VERSION}-multi"
+    SING_BOX_RELEASE_TAG="$SING_BOX_VERSION"
     BIN_BASE_URL="https://github.com/${SING_BOX_REPO}/releases/download/${SING_BOX_RELEASE_TAG}"
   fi
   export SING_BOX_VERSION SING_BOX_RELEASE_TAG BIN_BASE_URL
@@ -224,7 +224,7 @@ install_binary() {
 
   if [ "$SING_BOX_VERSION_INPUT" = "latest" ]; then
     SING_BOX_VERSION="$ACTUAL_VERSION"
-    SING_BOX_RELEASE_TAG="v${ACTUAL_VERSION}-multi"
+    SING_BOX_RELEASE_TAG="$ACTUAL_VERSION"
     export SING_BOX_VERSION SING_BOX_RELEASE_TAG
     log "本仓库 Latest 实际版本：${ACTUAL_VERSION}"
   else
