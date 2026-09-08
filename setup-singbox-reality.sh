@@ -114,12 +114,12 @@ validate_domain() {
 
 ask_port_domain() {
   echo
-  printf "请输入监听端口 [%s]: " "$DEFAULT_PORT"
+  printf "端口 [%s]: " "$DEFAULT_PORT"
   read -r PORT_INPUT </dev/tty || true
   PORT="${PORT_INPUT:-$DEFAULT_PORT}"
   validate_port "$PORT"
 
-  printf "请输入 REALITY 域名 / SNI [%s]: " "$DEFAULT_DOMAIN"
+  printf "REALITY 域名 [%s]: " "$DEFAULT_DOMAIN"
   read -r DOMAIN_INPUT </dev/tty || true
   REALITY_DOMAIN="${DOMAIN_INPUT:-$DEFAULT_DOMAIN}"
   validate_domain "$REALITY_DOMAIN"
@@ -131,15 +131,12 @@ select_version() {
   menu_title="$1"
   while true; do
     echo
-    echo "=============================================="
-    echo " ${menu_title} - 版本选择"
-    echo "=============================================="
-    echo " 1) 默认版本：${DEFAULT_SING_BOX_VERSION}"
-    echo " 2) Latest（本仓库最新 Release）"
-    echo " 3) 指定版本号"
-    echo " 0) 返回上一级"
-    echo "=============================================="
-    printf "请选择: "
+    echo "=== ${menu_title} ==="
+    echo "1) ${DEFAULT_SING_BOX_VERSION}"
+    echo "2) Latest"
+    echo "3) 指定版本"
+    echo "0) 返回"
+    printf "选择: "
     read -r VERSION_CHOICE </dev/tty || true
 
     case "$VERSION_CHOICE" in
@@ -152,7 +149,7 @@ select_version() {
         return 0
         ;;
       3)
-        printf "请输入 sing-box 版本号，例如 1.13.22: "
+        printf "版本号: "
         read -r VERSION_INPUT </dev/tty || true
         VERSION_INPUT="${VERSION_INPUT#v}"
         case "$VERSION_INPUT" in
@@ -172,7 +169,7 @@ select_version() {
 }
 
 select_install_version() { select_version "安装 sing-box"; }
-select_update_version() { select_version "更新 sing-box 核心"; }
+select_update_version() { select_version "更新核心"; }
 
 detect_arch() {
   ARCH="$(uname -m)"
@@ -226,7 +223,7 @@ install_binary() {
     SING_BOX_VERSION="$ACTUAL_VERSION"
     SING_BOX_RELEASE_TAG="$ACTUAL_VERSION"
     export SING_BOX_VERSION SING_BOX_RELEASE_TAG
-    log "本仓库 Latest 实际版本：${ACTUAL_VERSION}"
+    log "Latest 实际版本：${ACTUAL_VERSION}"
   else
     case "$ACTUAL_VERSION" in
       "$SING_BOX_VERSION"|v"$SING_BOX_VERSION") ;;
@@ -235,17 +232,17 @@ install_binary() {
   fi
 
   if [ -f "$CONF_FILE" ]; then
-    log "使用下载的新核心检查现有配置..."
+    log "检查现有配置..."
     "$BIN_TMP" check -c "$CONF_FILE" || die "新核心无法通过现有配置检查，旧核心保持不变。"
   fi
 
   mv -f "$BIN_TMP" "$BIN_DST"
   chmod 755 "$BIN_DST"
-  log "sing-box 核心已安装：${BIN_DST}"
+  log "核心已安装：${BIN_DST}"
 }
 
 check_binary_exists() {
-  [ -x "$BIN_DST" ] || die "没有找到 ${BIN_DST}。请先选择安装。"
+  [ -x "$BIN_DST" ] || die "没有找到 ${BIN_DST}，请先安装。"
 }
 
 stop_conflicting_services() {
@@ -364,6 +361,50 @@ service_is_healthy() {
   fi
 }
 
+get_sing_box_version() {
+  if [ ! -x "$BIN_DST" ]; then
+    echo "未安装"
+    return 0
+  fi
+  version_output="$("$BIN_DST" version 2>/dev/null || true)"
+  version="$(printf '%s\n' "$version_output" | awk '/^sing-box version / {print $3; exit}')"
+  if [ -n "$version" ]; then
+    echo "$version"
+  else
+    echo "未知"
+  fi
+}
+
+get_service_state() {
+  if [ ! -x "$BIN_DST" ]; then
+    echo "未安装"
+    return 0
+  fi
+
+  if ! rc-service sing-box status >/dev/null 2>&1; then
+    echo "停止"
+    return 0
+  fi
+
+  sleep 1
+  if ! rc-service sing-box status >/dev/null 2>&1; then
+    echo "停止"
+    return 0
+  fi
+
+  if command -v pidof >/dev/null 2>&1; then
+    pids="$(pidof sing-box 2>/dev/null || true)"
+    [ -n "$pids" ] || { echo "停止"; return 0; }
+    for pid in $pids; do
+      kill -0 "$pid" 2>/dev/null || { echo "停止"; return 0; }
+    done
+  else
+    pgrep -x sing-box >/dev/null 2>&1 || { echo "停止"; return 0; }
+  fi
+
+  echo "运行"
+}
+
 test_and_restart() {
   log "检查 sing-box 配置..."
   "$BIN_DST" check -c "$CONF_FILE"
@@ -375,14 +416,14 @@ test_and_restart() {
 
 update_core_mode() {
   echo
-  echo "=== 更新 sing-box 核心 ==="
+  echo "=== 更新核心 ==="
 
   if ! select_update_version; then
     return 0
   fi
 
   echo
-  echo "已选择版本：${SING_BOX_VERSION_INPUT}"
+  echo "版本：${SING_BOX_VERSION_INPUT}"
   echo
 
   protect_ssh
@@ -402,12 +443,11 @@ update_core_mode() {
   if [ -f "$CONF_FILE" ]; then
     log "现有配置检查通过，保留 UUID / REALITY 密钥 / Short ID。"
     if [ "$UPDATE_SERVICE_WAS_RUNNING" = "yes" ]; then
-      log "启动新核心并进行运行验证..."
+      log "启动新核心并验证..."
       rc-service sing-box start || die "新核心启动失败。"
       service_is_healthy || die "新核心启动后未通过运行状态检查。"
-      rc-service sing-box status || true
     else
-      log "更新前 sing-box 本来就是停止状态，保持停止。"
+      log "更新前 sing-box 已停止，保持停止。"
     fi
   else
     warn "未发现现有配置：${CONF_FILE}"
@@ -415,7 +455,7 @@ update_core_mode() {
   fi
 
   echo
-  echo "核心更新完成，配置未重新生成。"
+  echo "核心更新完成。"
 }
 
 detect_server_ip() {
@@ -437,12 +477,6 @@ write_info() {
   LINK="vless://${UUID}@${SERVER_ADDR}:${PORT}?encryption=none&security=reality&sni=${REALITY_DOMAIN}&fp=chrome&type=tcp&flow=xtls-rprx-vision&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}#singbox-reality"
   cat > "$INFO_FILE" <<EOF
 sing-box VLESS + REALITY
-
-sing-box Version:
-${SING_BOX_VERSION}
-
-Release:
-${SING_BOX_RELEASE_TAG}
 
 Address: ${SERVER_ADDR}
 Port: ${PORT}
@@ -482,12 +516,12 @@ EOF
 
 install_mode() {
   echo
-  echo "=== 安装 sing-box + 生成配置 ==="
+  echo "=== 安装 sing-box ==="
   if ! select_install_version; then
     return 0
   fi
   echo
-  echo "已选择版本：${SING_BOX_VERSION_INPUT}"
+  echo "版本：${SING_BOX_VERSION_INPUT}"
   ask_port_domain
   protect_ssh
   stop_conflicting_services
@@ -515,20 +549,27 @@ update_config_mode() {
 
 show_status() {
   echo
-  echo "=== 当前状态 ==="
+  echo "=== 状态 ==="
+  echo "版本：$(get_sing_box_version)"
+  echo "状态：$(get_service_state)"
+  echo
+
   if [ -x "$BIN_DST" ]; then
-    "$BIN_DST" version || true
-  else
-    warn "未安装 sing-box：${BIN_DST} 不存在。"
+    echo "监听："
+    ss -lntp 2>/dev/null | grep sing-box || echo "无"
   fi
-  echo
-  rc-service sing-box status 2>/dev/null || true
-  echo
-  ss -lntp 2>/dev/null | grep sing-box || true
-  echo
+
   if [ -f "$INFO_FILE" ]; then
-    cat "$INFO_FILE"
+    echo
+    echo "=== 节点信息 ==="
+    awk '
+      /^sing-box Version:/ {skip=1; next}
+      /^Release:/ {skip=1; next}
+      /^Address:/ {skip=0}
+      skip == 0 {print}
+    ' "$INFO_FILE"
   else
+    echo
     warn "未找到节点信息文件：${INFO_FILE}"
   fi
   pause
@@ -537,19 +578,22 @@ show_status() {
 main_menu() {
   while true; do
     clear 2>/dev/null || true
-    echo "=============================================="
-    echo " sing-box VLESS + REALITY for Alpine"
-    echo "=============================================="
-    echo " 默认版本：${DEFAULT_SING_BOX_VERSION}"
-    echo " Latest：本仓库最新 Release"
-    echo "=============================================="
-    echo " 1) 安装 sing-box"
-    echo " 2) 更新 sing-box 核心"
-    echo " 3) 更新配置"
-    echo " 4) 查看状态"
-    echo " 0) 退出"
-    echo "=============================================="
-    printf "请选择: "
+    current_version="$(get_sing_box_version)"
+    current_state="$(get_service_state)"
+
+    echo "================================"
+    echo " sing-box VLESS + REALITY"
+    echo "================================"
+    echo "版本：${current_version}"
+    echo "状态：${current_state}"
+    echo "--------------------------------"
+    echo "1) 安装"
+    echo "2) 更新核心"
+    echo "3) 更新配置"
+    echo "4) 查看状态"
+    echo "0) 退出"
+    echo "================================"
+    printf "选择: "
     read -r choice </dev/tty || true
     case "$choice" in
       1) install_mode; break ;;
