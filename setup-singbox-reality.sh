@@ -459,7 +459,7 @@ get_info_value() {
   if [ ! -f "$INFO_FILE" ]; then
     return 0
   fi
-  awk -F': ' -v key="$key" '$1 == key {print substr($0, length(key) + 3); exit}' "$INFO_FILE"
+  awk -F': ' -v key="$key" '$1 == key {print $2; exit}' "$INFO_FILE"
 }
 
 show_status() {
@@ -485,17 +485,17 @@ show_status() {
   echo "----------------------------------------"
 
   if [ -f "$INFO_FILE" ]; then
-    printf "服务器      %s\n" "$(get_info_value 'Address:')"
-    printf "端口        %s\n" "$(get_info_value 'Port:')"
-    printf "UUID        %s\n" "$(get_info_value 'UUID:')"
-    printf "Flow        %s\n" "$(get_info_value 'Flow:')"
-    printf "Network     %s\n" "$(get_info_value 'Network:')"
-    printf "Security    %s\n" "$(get_info_value 'Security:')"
-    printf "SNI         %s\n" "$(get_info_value 'SNI / serverName:')"
-    printf "Handshake   %s\n" "$(get_info_value 'Handshake:')"
-    printf "PublicKey   %s\n" "$(get_info_value 'PublicKey / pbk:')"
-    printf "Short ID    %s\n" "$(get_info_value 'ShortId / sid:')"
-    printf "Fingerprint %s\n" "$(get_info_value 'Fingerprint:')"
+    printf "服务器      %s\n" "$(get_info_value 'Address')"
+    printf "端口        %s\n" "$(get_info_value 'Port')"
+    printf "UUID        %s\n" "$(get_info_value 'UUID')"
+    printf "Flow        %s\n" "$(get_info_value 'Flow')"
+    printf "Network     %s\n" "$(get_info_value 'Network')"
+    printf "Security    %s\n" "$(get_info_value 'Security')"
+    printf "SNI         %s\n" "$(get_info_value 'SNI / serverName')"
+    printf "Handshake   %s\n" "$(get_info_value 'Handshake')"
+    printf "PublicKey   %s\n" "$(get_info_value 'PublicKey / pbk')"
+    printf "Short ID    %s\n" "$(get_info_value 'ShortId / sid')"
+    printf "Fingerprint %s\n" "$(get_info_value 'Fingerprint')"
 
     echo
     echo "----------------------------------------"
