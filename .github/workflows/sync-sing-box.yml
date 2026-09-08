@@ -1,9 +1,6 @@
 name: Sync sing-box Release
 
 on:
-  # ------------------------------------------------------------
-  # Manual trigger
-  # ------------------------------------------------------------
   workflow_dispatch:
     inputs:
       version:
@@ -11,50 +8,29 @@ on:
         required: true
         default: "latest"
         type: string
-
       force:
         description: "Overwrite existing Release assets"
         required: true
         default: false
         type: boolean
-
-  # ------------------------------------------------------------
-  # Automatic check
-  # Check official sing-box latest release every 6 hours
-  # ------------------------------------------------------------
   schedule:
     - cron: "17 */6 * * *"
 
-
-# --------------------------------------------------------------
-# Prevent concurrent sync jobs from modifying the same Release
-# --------------------------------------------------------------
 concurrency:
   group: sync-sing-box
   cancel-in-progress: false
 
-
-# --------------------------------------------------------------
-# Required to create/update GitHub Releases
-# --------------------------------------------------------------
 permissions:
   contents: write
 
-
 env:
   SOURCE_REPO: SagerNet/sing-box
-
 
 jobs:
   sync:
     name: Sync sing-box
     runs-on: ubuntu-latest
-
     steps:
-
-      # ==========================================================
-      # Resolve version
-      # ==========================================================
       - name: Resolve version
         id: version
         shell: bash
@@ -63,101 +39,41 @@ jobs:
           INPUT_VERSION: ${{ inputs.version || 'latest' }}
         run: |
           set -e
-
-          echo "========================================"
-          echo "Resolving sing-box version"
-          echo "========================================"
-          echo "Input: $INPUT_VERSION"
-
           INPUT_VERSION="$(echo "$INPUT_VERSION" | xargs)"
-
-          if [ -z "$INPUT_VERSION" ]; then
-            echo "::error::Version cannot be empty."
-            exit 1
-          fi
-
-          # Remove optional leading "v"
+          [ -n "$INPUT_VERSION" ] || { echo "::error::Version cannot be empty."; exit 1; }
           VERSION_INPUT="${INPUT_VERSION#v}"
 
-          echo "Normalized input: $VERSION_INPUT"
-
-          # ------------------------------------------------------
-          # latest
-          # ------------------------------------------------------
           if [ "$VERSION_INPUT" = "latest" ]; then
-
-            echo "Getting latest stable sing-box release..."
-
-            SOURCE_TAG=$(curl -fsSL \
+            SOURCE_TAG="$(curl -fsSL \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${SOURCE_REPO}/releases/latest" \
-              | jq -r '.tag_name')
-
-          # ------------------------------------------------------
-          # Specific version
-          # ------------------------------------------------------
+              "https://api.github.com/repos/${SOURCE_REPO}/releases/latest" | jq -r '.tag_name')"
           else
-
             SOURCE_TAG="v${VERSION_INPUT}"
-
-            echo "Checking requested release: $SOURCE_TAG"
-
-            CHECKED_TAG=$(curl -fsSL \
+            CHECKED_TAG="$(curl -fsSL \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${SOURCE_REPO}/releases/tags/${SOURCE_TAG}" \
-              | jq -r '.tag_name')
-
-            if [ "$CHECKED_TAG" != "$SOURCE_TAG" ]; then
-              echo "::error::Release not found: $SOURCE_TAG"
-              exit 1
-            fi
-
+              "https://api.github.com/repos/${SOURCE_REPO}/releases/tags/${SOURCE_TAG}" | jq -r '.tag_name')"
+            [ "$CHECKED_TAG" = "$SOURCE_TAG" ] || { echo "::error::Release not found: $SOURCE_TAG"; exit 1; }
           fi
 
-          # ------------------------------------------------------
-          # Validate resolved tag
-          # ------------------------------------------------------
-          if [ -z "$SOURCE_TAG" ] || [ "$SOURCE_TAG" = "null" ]; then
-            echo "::error::Unable to resolve sing-box version."
-            exit 1
-          fi
+          [ -n "$SOURCE_TAG" ] && [ "$SOURCE_TAG" != "null" ] || { echo "::error::Unable to resolve sing-box version."; exit 1; }
 
           VERSION="${SOURCE_TAG#v}"
-          TARGET_TAG="${SOURCE_TAG}-multi"
-
+          TARGET_TAG="$VERSION"
+          RELEASE_TITLE="${VERSION}-musl"
           AMD64_ASSET="sing-box-${VERSION}-linux-amd64-musl.tar.gz"
           ARM64_ASSET="sing-box-${VERSION}-linux-arm64-musl.tar.gz"
-
-          echo "========================================"
-          echo "Resolved successfully"
-          echo "Source tag: $SOURCE_TAG"
-          echo "Version: $VERSION"
-          echo "Target tag: $TARGET_TAG"
-          echo "AMD64: $AMD64_ASSET"
-          echo "ARM64: $ARM64_ASSET"
-          echo "========================================"
 
           echo "source_tag=$SOURCE_TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_title=$RELEASE_TITLE" >> "$GITHUB_OUTPUT"
           echo "amd64_asset=$AMD64_ASSET" >> "$GITHUB_OUTPUT"
           echo "arm64_asset=$ARM64_ASSET" >> "$GITHUB_OUTPUT"
 
-
-      # ==========================================================
-      # Check whether target Release already exists
-      #
-      # Automatic:
-      #   existing Release -> SKIP
-      #
-      # Manual:
-      #   force=false -> SKIP
-      #   force=true  -> continue and overwrite
-      # ==========================================================
       - name: Check target Release
         id: target
         env:
@@ -167,51 +83,17 @@ jobs:
         shell: bash
         run: |
           set -e
-
-          echo "========================================"
-          echo "Checking target Release"
-          echo "========================================"
-          echo "Target: $TARGET_TAG"
-          echo "Force:  $FORCE"
-
-          if gh release view "$TARGET_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              >/dev/null 2>&1; then
-
-            echo
-            echo "Release already exists: $TARGET_TAG"
-
+          if gh release view "$TARGET_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             if [ "$FORCE" = "true" ]; then
-
-              echo "force=true"
-              echo "Existing Release will be updated."
-
               echo "skip=false" >> "$GITHUB_OUTPUT"
-
             else
-
-              echo "force=false"
-              echo "Nothing to do."
-              echo "Skipping download and Release update."
-
               echo "skip=true" >> "$GITHUB_OUTPUT"
-
+              echo "Release already exists: $TARGET_TAG"
             fi
-
           else
-
-            echo
-            echo "Release does not exist."
-            echo "A new Release will be created."
-
             echo "skip=false" >> "$GITHUB_OUTPUT"
-
           fi
 
-
-      # ==========================================================
-      # Check official assets
-      # ==========================================================
       - name: Check official assets
         if: steps.target.outputs.skip != 'true'
         env:
@@ -222,35 +104,10 @@ jobs:
         shell: bash
         run: |
           set -e
+          gh api "repos/${SOURCE_REPO}/releases/tags/${SOURCE_TAG}" --jq '.assets[].name' | tee /tmp/assets.txt
+          grep -Fxq "$AMD64_ASSET" /tmp/assets.txt || { echo "::error::AMD64 asset not found: $AMD64_ASSET"; exit 1; }
+          grep -Fxq "$ARM64_ASSET" /tmp/assets.txt || { echo "::error::ARM64 asset not found: $ARM64_ASSET"; exit 1; }
 
-          echo "Checking official Release assets..."
-
-          gh api \
-            "repos/${SOURCE_REPO}/releases/tags/${SOURCE_TAG}" \
-            --jq '.assets[].name' |
-            tee /tmp/assets.txt
-
-          echo
-
-          grep -Fxq "$AMD64_ASSET" /tmp/assets.txt || {
-            echo "::error::AMD64 asset not found:"
-            echo "$AMD64_ASSET"
-            exit 1
-          }
-
-          grep -Fxq "$ARM64_ASSET" /tmp/assets.txt || {
-            echo "::error::ARM64 asset not found:"
-            echo "$ARM64_ASSET"
-            exit 1
-          }
-
-          echo
-          echo "Official assets found."
-
-
-      # ==========================================================
-      # Download
-      # ==========================================================
       - name: Download official packages
         if: steps.target.outputs.skip != 'true'
         env:
@@ -260,53 +117,19 @@ jobs:
         shell: bash
         run: |
           set -e
-
           mkdir -p download
-
-          AMD64_URL="https://github.com/${SOURCE_REPO}/releases/download/${SOURCE_TAG}/${AMD64_ASSET}"
-          ARM64_URL="https://github.com/${SOURCE_REPO}/releases/download/${SOURCE_TAG}/${ARM64_ASSET}"
-
-          echo "Downloading AMD64:"
-          echo "$AMD64_URL"
-
-          curl -fL --retry 5 \
-            -o "download/${AMD64_ASSET}" \
-            "$AMD64_URL"
-
-          echo
-          echo "Downloading ARM64:"
-          echo "$ARM64_URL"
-
-          curl -fL --retry 5 \
-            -o "download/${ARM64_ASSET}" \
-            "$ARM64_URL"
-
-          echo
-          echo "Downloaded files:"
+          curl -fL --retry 5 -o "download/${AMD64_ASSET}" "https://github.com/${SOURCE_REPO}/releases/download/${SOURCE_TAG}/${AMD64_ASSET}"
+          curl -fL --retry 5 -o "download/${ARM64_ASSET}" "https://github.com/${SOURCE_REPO}/releases/download/${SOURCE_TAG}/${ARM64_ASSET}"
           ls -lh download/
 
-
-      # ==========================================================
-      # Verify archives
-      # ==========================================================
       - name: Verify archives
         if: steps.target.outputs.skip != 'true'
         shell: bash
         run: |
           set -e
-
           gzip -t download/*.tar.gz
+          for file in download/*.tar.gz; do tar -tzf "$file" >/dev/null; done
 
-          for file in download/*.tar.gz; do
-            tar -tzf "$file" >/dev/null
-          done
-
-          echo "Archive verification passed."
-
-
-      # ==========================================================
-      # Extract
-      # ==========================================================
       - name: Extract sing-box
         if: steps.target.outputs.skip != 'true'
         env:
@@ -315,58 +138,18 @@ jobs:
         shell: bash
         run: |
           set -e
-
-          mkdir -p extract/amd64
-          mkdir -p extract/arm64
-          mkdir -p output
-
-          tar -xzf \
-            "download/${AMD64_ASSET}" \
-            -C extract/amd64
-
-          tar -xzf \
-            "download/${ARM64_ASSET}" \
-            -C extract/arm64
-
-          AMD64_BIN="$(
-            find extract/amd64 \
-              -type f \
-              -name sing-box \
-              -print -quit
-          )"
-
-          ARM64_BIN="$(
-            find extract/arm64 \
-              -type f \
-              -name sing-box \
-              -print -quit
-          )"
-
-          if [ -z "$AMD64_BIN" ]; then
-            echo "::error::AMD64 sing-box binary not found."
-            exit 1
-          fi
-
-          if [ -z "$ARM64_BIN" ]; then
-            echo "::error::ARM64 sing-box binary not found."
-            exit 1
-          fi
-
+          mkdir -p extract/amd64 extract/arm64 output
+          tar -xzf "download/${AMD64_ASSET}" -C extract/amd64
+          tar -xzf "download/${ARM64_ASSET}" -C extract/arm64
+          AMD64_BIN="$(find extract/amd64 -type f -name sing-box -print -quit)"
+          ARM64_BIN="$(find extract/arm64 -type f -name sing-box -print -quit)"
+          [ -n "$AMD64_BIN" ] || { echo "::error::AMD64 sing-box binary not found."; exit 1; }
+          [ -n "$ARM64_BIN" ] || { echo "::error::ARM64 sing-box binary not found."; exit 1; }
           cp "$AMD64_BIN" output/sing-box-amd64
           cp "$ARM64_BIN" output/sing-box-arm64
-
-          chmod 755 \
-            output/sing-box-amd64 \
-            output/sing-box-arm64
-
-          echo
-          echo "Extracted binaries:"
+          chmod 755 output/sing-box-amd64 output/sing-box-arm64
           ls -lh output/
 
-
-      # ==========================================================
-      # Validate binaries
-      # ==========================================================
       - name: Validate binaries
         if: steps.target.outputs.skip != 'true'
         env:
@@ -374,70 +157,35 @@ jobs:
         shell: bash
         run: |
           set -e
-
-          echo "AMD64:"
           file output/sing-box-amd64
-
-          echo
-          echo "ARM64:"
           file output/sing-box-arm64
-
-          echo
-          echo "sing-box version:"
-
           output/sing-box-amd64 version
-
-          ACTUAL_VERSION="$(
-            output/sing-box-amd64 version |
-            sed -n 's/^sing-box version \([^ ]*\).*$/\1/p' |
-            head -n 1
-          )"
-
-          echo
+          ACTUAL_VERSION="$(output/sing-box-amd64 version | sed -n 's/^sing-box version \([^ ]*\).*$/\1/p' | head -n 1)"
           echo "Expected: ${EXPECTED_VERSION}"
           echo "Actual:   ${ACTUAL_VERSION}"
+          [ "$ACTUAL_VERSION" = "$EXPECTED_VERSION" ] || { echo "::error::Version mismatch."; exit 1; }
 
-          if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
-            echo "::error::Version mismatch."
-            exit 1
-          fi
-
-
-      # ==========================================================
-      # SHA256
-      # ==========================================================
       - name: Generate SHA256
         if: steps.target.outputs.skip != 'true'
         shell: bash
         run: |
           set -e
-
           cd output
-
-          sha256sum \
-            sing-box-amd64 \
-            sing-box-arm64 \
-            > SHA256SUMS
-
-          echo
+          sha256sum sing-box-amd64 sing-box-arm64 > SHA256SUMS
           cat SHA256SUMS
 
-
-      # ==========================================================
-      # Create or update Release
-      # ==========================================================
       - name: Create or update Release
         if: steps.target.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TAG: ${{ steps.version.outputs.source_tag }}
           TARGET_TAG: ${{ steps.version.outputs.target_tag }}
+          RELEASE_TITLE: ${{ steps.version.outputs.release_title }}
           VERSION: ${{ steps.version.outputs.version }}
           FORCE: ${{ inputs.force || false }}
         shell: bash
         run: |
           set -e
-
           cat > release-notes.md <<EOF
           ## sing-box ${SOURCE_TAG} musl
 
@@ -458,58 +206,16 @@ jobs:
           - SHA256SUMS
           EOF
 
-          # ------------------------------------------------------
-          # Existing Release
-          # ------------------------------------------------------
-          if gh release view "$TARGET_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              >/dev/null 2>&1; then
-
-            if [ "$FORCE" != "true" ]; then
-              echo "::error::Release ${TARGET_TAG} already exists."
-              echo "Use force=true to overwrite."
-              exit 1
-            fi
-
-            echo "Updating existing Release..."
-
-            gh release upload "$TARGET_TAG" \
-              output/sing-box-amd64 \
-              output/sing-box-arm64 \
-              output/SHA256SUMS \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
-
-            gh release edit "$TARGET_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "sing-box ${SOURCE_TAG} musl · amd64/arm64" \
-              --notes-file release-notes.md
-
-          # ------------------------------------------------------
-          # New Release
-          # ------------------------------------------------------
+          if gh release view "$TARGET_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            [ "$FORCE" = "true" ] || { echo "::error::Release ${TARGET_TAG} already exists. Use force=true to overwrite."; exit 1; }
+            gh release upload "$TARGET_TAG" output/sing-box-amd64 output/sing-box-arm64 output/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TARGET_TAG" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TITLE" --notes-file release-notes.md
           else
-
-            echo "Creating Release ${TARGET_TAG}..."
-
-            gh release create "$TARGET_TAG" \
-              output/sing-box-amd64 \
-              output/sing-box-arm64 \
-              output/SHA256SUMS \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "sing-box ${SOURCE_TAG} musl · amd64/arm64" \
-              --notes-file release-notes.md
-
+            gh release create "$TARGET_TAG" output/sing-box-amd64 output/sing-box-arm64 output/SHA256SUMS --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TITLE" --notes-file release-notes.md
           fi
 
-          echo
-          echo "Release completed:"
-          echo "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TARGET_TAG}"
+          echo "Release completed: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TARGET_TAG}"
 
-
-      # ==========================================================
-      # Summary
-      # ==========================================================
       - name: Summary
         if: always()
         env:
@@ -524,9 +230,7 @@ jobs:
           {
             echo "# sing-box Release Sync"
             echo
-
             if [ "$SKIP" = "true" ]; then
-
               echo "## Status: SKIPPED"
               echo
               echo "The target Release already exists."
@@ -538,9 +242,7 @@ jobs:
               echo "| Target | ${TARGET_TAG} |"
               echo "| Force | ${FORCE} |"
               echo "| Action | No changes |"
-
             elif [ "$JOB_STATUS" = "success" ]; then
-
               echo "## Status: SUCCESS"
               echo
               echo "Release synchronized successfully."
@@ -553,9 +255,7 @@ jobs:
               echo "| AMD64 | sing-box-amd64 |"
               echo "| ARM64 | sing-box-arm64 |"
               echo "| Checksums | SHA256SUMS |"
-
             else
-
               echo "## Status: FAILED"
               echo
               echo "The sync workflow did not complete successfully."
@@ -565,7 +265,5 @@ jobs:
               echo "| Source | ${SOURCE_TAG:-unknown} |"
               echo "| Version | ${VERSION:-unknown} |"
               echo "| Target | ${TARGET_TAG:-unknown} |"
-
             fi
-
           } >> "$GITHUB_STEP_SUMMARY"
