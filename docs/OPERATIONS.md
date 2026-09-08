@@ -1,8 +1,8 @@
 # 64M sing-box VLESS + REALITY 运维说明
 
-> 本文根据当前仓库的安装脚本 `setup-singbox-reality.sh`、GitHub Actions 工作流 `.github/workflows/sync-sing-box.yml` 以及最近的代码变更整理。
+> 本文根据当前仓库的安装脚本 `setup-singbox-reality.sh` 和 GitHub Actions 工作流 `.github/workflows/sync-sing-box.yml` 编写。
 >
-> 适用对象：使用 Alpine Linux、约 64 MB 内存 VPS 部署 sing-box VLESS + REALITY + Vision 的管理员。
+> 适用对象：使用 Alpine Linux、OpenRC、约 64 MB 内存 VPS 部署 sing-box VLESS + REALITY + Vision 的管理员。
 
 ## 1. 项目结构
 
@@ -14,138 +14,302 @@
 ├── setup-singbox-reality.sh        # 安装、配置、更新、状态管理脚本
 ├── README.md                       # 快速开始
 └── docs/
-    └── OPERATIONS.md               # 本文：脚本与 CI/CD 运维说明
+    └── OPERATIONS.md               # 本文：运维说明
 ```
 
-项目的核心职责可以分为两部分：
+项目分为两部分：
 
-1. **服务器侧部署**：安装脚本负责 Alpine/OpenRC 环境中的 sing-box 安装、配置生成和服务管理。
-2. **核心发布同步**：GitHub Actions 从官方 `SagerNet/sing-box` Release 获取 Linux musl 二进制，提取 amd64/arm64 核心并发布到本仓库的 Release，供安装脚本下载。
+1. **服务器侧部署**：安装脚本负责 Alpine/OpenRC 环境中的 sing-box 安装、配置生成、核心更新和服务管理。
+2. **核心发布同步**：GitHub Actions 从官方 `SagerNet/sing-box` Release 获取 Linux musl 压缩包，提取 amd64/arm64 二进制并发布到本仓库 Release，供安装脚本下载。
 
 ---
 
-## 2. 安装脚本工作方式
+## 2. 安装脚本
 
-脚本入口为 `setup-singbox-reality.sh`，解释器使用 Alpine 默认的 `ash`，并启用 `set -eu`，因此未定义变量或未处理的命令错误会终止脚本。
+脚本入口：`setup-singbox-reality.sh`
 
-### 2.1 支持的运行方式
+脚本使用 Alpine 的 `ash`，启用 `set -eu`，要求 root 权限。
 
-直接从仓库执行：
+### 2.1 远程执行
+
+使用 wget：
 
 ```sh
 wget -qO- https://raw.githubusercontent.com/opyzzzz/64M-sing-box-vless-vision/refs/heads/main/setup-singbox-reality.sh | sh
 ```
 
-或：
+使用 curl：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/opyzzzz/64M-sing-box-vless-vision/refs/heads/main/setup-singbox-reality.sh | sh
 ```
 
-脚本要求 root 权限，并通过交互菜单提供安装、更新配置、查看状态以及 sing-box 核心更新等操作。
+主菜单：
 
-### 2.2 sing-box 版本解析
-
-脚本默认核心版本为 `1.13.21`，同时支持：
-
-- 默认版本：`1.13.21`
-- `latest`：使用本仓库最新 Release
-- 指定版本：例如 `1.13.22`
-
-指定版本会被规范化为不带 `v` 的版本号；下载目标 Release tag 使用 `v<版本>-multi`。
-
-`latest` 不直接下载官方 GitHub Release，而是使用本仓库的最新 Release。这是整个项目能够在低内存 VPS 上稳定使用的关键：GitHub Actions 先把官方 musl 包转换成仓库自己的轻量二进制 Release。
-
-### 2.3 CPU 架构
-
-目前脚本明确支持：
-
-| 系统架构 | sing-box 架构 | 仓库 Release 文件 |
-|---|---|---|
-| `x86_64` / `amd64` | `amd64` | `sing-box-amd64` |
-| `aarch64` / `arm64` | `arm64` | `sing-box-arm64` |
-
-其他架构会直接终止并提示不支持。
-
-### 2.4 下载与安全校验
-
-安装/更新核心时，脚本会：
-
-1. 检测 `wget` 或 `curl`。
-2. 创建临时下载文件。
-3. 下载对应架构的二进制。
-4. 执行 `sing-box version` 验证文件可运行。
-5. 读取实际版本号并与请求版本比较。
-6. 如果已经存在配置，先使用新核心执行 `sing-box check -c config.json`。
-7. 只有检查成功后才替换 `/usr/local/bin/sing-box`。
-
-临时文件在脚本退出时通过 `trap` 清理。
-
-因此，**核心更新不会先覆盖旧核心再发现新核心不可用**；配置检查失败时会保留当前正在使用的旧核心。
+```text
+1) 安装 sing-box
+2) 更新 sing-box 核心
+3) 更新配置
+4) 查看状态
+0) 退出
+```
 
 ---
 
-## 3. VLESS + REALITY + Vision 配置
+## 3. sing-box 版本与 Release 规则
 
-默认部署参数为：
+当前默认版本为：
 
-| 项目 | 默认值 |
+```text
+1.13.21
+```
+
+脚本支持三种选择：
+
+```text
+1) 默认版本 1.13.21
+2) Latest（本仓库最新 Release）
+3) 指定版本号
+```
+
+指定版本可以输入：
+
+```text
+1.13.21
+```
+
+也兼容：
+
+```text
+v1.13.21
+```
+
+脚本内部会去掉开头的 `v`，统一使用纯版本号。
+
+### 3.1 本仓库 Release 命名
+
+新版 Release 采用非常简单的命名方式：
+
+| 项目 | 示例 |
 |---|---|
-| 协议 | VLESS |
-| 传输 | TCP |
-| TLS/安全层 | REALITY |
-| Flow | `xtls-rprx-vision` |
-| Fingerprint | Chrome（节点信息按当前脚本输出） |
-| 监听地址 | `0.0.0.0` |
-| 监听端口 | `443` |
-| 默认 SNI | `www.cloudflare.com` |
-| REALITY handshake 端口 | `443` |
-| 出站 | `direct` |
+| Tag | `1.13.21` |
+| Release title | `1.13.21-musl` |
+| amd64 | `sing-box-amd64` |
+| arm64 | `sing-box-arm64` |
+| 校验文件 | `SHA256SUMS` |
 
-脚本会在安装/更新配置时重新生成：
+**Tag 不使用 `v`，也不再使用 `-multi`。**
+
+例如版本 `1.13.21` 的实际下载地址为：
+
+```text
+https://github.com/opyzzzz/64M-sing-box-vless-vision/releases/download/1.13.21/sing-box-amd64
+```
+
+ARM64：
+
+```text
+https://github.com/opyzzzz/64M-sing-box-vless-vision/releases/download/1.13.21/sing-box-arm64
+```
+
+Latest 则使用 GitHub 的 latest 下载入口：
+
+```text
+https://github.com/opyzzzz/64M-sing-box-vless-vision/releases/latest/download/sing-box-amd64
+https://github.com/opyzzzz/64M-sing-box-vless-vision/releases/latest/download/sing-box-arm64
+```
+
+因此安装脚本不需要预先知道 Latest 的版本号。
+
+### 3.2 版本校验
+
+脚本下载二进制后执行：
+
+```sh
+sing-box version
+```
+
+然后读取实际版本号。
+
+- 指定版本：实际版本必须与请求版本一致。
+- Latest：以下载到的二进制实际版本作为当前版本。
+
+这样可以避免“检测到一个版本、实际下载另一个版本”的问题。
+
+---
+
+## 4. 支持的 CPU 架构
+
+当前项目只考虑两种架构：
+
+| 系统架构 | Release 文件 |
+|---|---|
+| `x86_64` / `amd64` | `sing-box-amd64` |
+| `aarch64` / `arm64` | `sing-box-arm64` |
+
+其他架构不在当前项目范围内，脚本会直接提示不支持。
+
+不考虑 i386、ARMv7、MIPS、RISC-V、PPC64LE、s390x 等架构。
+
+---
+
+## 5. 安装与核心更新
+
+### 5.1 安装 sing-box
+
+选择：
+
+```text
+1) 安装 sing-box
+```
+
+安装流程会：
+
+1. 选择版本。
+2. 检测 CPU 架构。
+3. 检测 `wget` 或 `curl`。
+4. 从本仓库 Release 下载对应二进制。
+5. 验证二进制可以执行。
+6. 验证实际版本。
+7. 生成 VLESS + REALITY 配置所需参数。
+8. 写入 OpenRC 服务。
+9. 检查配置并启动服务。
+10. 输出节点信息和 VLESS 链接。
+
+### 5.2 更新 sing-box 核心
+
+选择：
+
+```text
+2) 更新 sing-box 核心
+```
+
+更新核心与更新配置是两件不同的事情。
+
+核心更新流程：
+
+```text
+选择版本
+   ↓
+停止正在运行的 sing-box
+   ↓
+下载新核心到临时文件
+   ↓
+验证 sing-box version
+   ↓
+检查现有 config.json
+   ↓
+替换 /usr/local/bin/sing-box
+   ↓
+如果更新前正在运行，则启动并检查状态
+```
+
+如果已有配置，脚本会先使用下载的新核心执行：
+
+```sh
+/usr/local/tmp/sing-box-download... check -c /usr/local/etc/sing-box/config.json
+```
+
+只有配置检查通过后才会替换现有核心。
+
+因此，**新核心无法通过现有配置检查时，旧核心不会被替换。**
+
+核心更新不会重新生成：
+
+- UUID
+- REALITY private key
+- REALITY public key
+- Short ID
+- `config.json`
+
+如果更新前 sing-box 已经是停止状态，更新后也保持停止状态。
+
+### 5.3 更新配置
+
+选择：
+
+```text
+3) 更新配置
+```
+
+该操作会重新生成：
 
 - UUID
 - REALITY private key
 - REALITY public key
 - Short ID
 
-配置文件写入后权限为 `600`。
+因此旧的客户端节点链接会失效。
 
-### 3.1 更新配置与更新核心的区别
-
-这是运维时最重要的区别：
-
-**更新配置**会重新生成身份和 REALITY 参数，因此旧节点链接会失效。
-
-**更新 sing-box 核心**只替换二进制，并检查现有配置；正常情况下会保留：
-
-- UUID
-- REALITY 密钥
-- Short ID
-- 现有 `config.json`
-
-因此，如果只是升级 sing-box 版本，应使用“更新 sing-box 核心”，不要通过重新生成配置来实现版本升级。
+**仅仅想升级 sing-box 版本时，不要使用“更新配置”，应使用“更新 sing-box 核心”。**
 
 ---
 
-## 4. OpenRC 服务
+## 6. VLESS + REALITY + Vision 配置
 
-脚本会生成 `/etc/init.d/sing-box`，并加入 OpenRC 默认启动级别。
+默认参数：
 
-服务执行的核心命令等价于：
+| 项目 | 默认值 |
+|---|---|
+| 协议 | VLESS |
+| 传输 | TCP |
+| 安全层 | REALITY |
+| Flow | `xtls-rprx-vision` |
+| Fingerprint | `chrome` |
+| 监听地址 | `0.0.0.0` |
+| 默认监听端口 | `443` |
+| 默认 SNI | `www.cloudflare.com` |
+| REALITY handshake 端口 | `443` |
+| 出站 | `direct` |
+
+配置文件：
+
+```text
+/usr/local/etc/sing-box/config.json
+```
+
+配置文件权限：
+
+```text
+600
+```
+
+### 6.1 节点信息
+
+脚本会生成：
+
+```text
+/root/singbox-vless-reality-info.txt
+```
+
+其中包含服务器地址、端口、UUID、REALITY 公钥、Short ID 和 VLESS 链接。
+
+该文件包含敏感信息，不要提交到 Git 仓库，也不要公开发布。
+
+---
+
+## 7. OpenRC 服务
+
+服务文件：
+
+```text
+/etc/init.d/sing-box
+```
+
+实际运行命令等价于：
 
 ```sh
 /usr/local/bin/sing-box run -c /usr/local/etc/sing-box/config.json
 ```
 
-针对低内存 VPS，服务环境设置了：
+服务环境针对低内存 VPS 设置：
 
 ```text
 GOMEMLIMIT=32MiB
 GOGC=25
 ```
 
-同时脚本在更新核心前会尝试降低 SSH/当前进程被 OOM Killer 处理的风险，并在核心更新期间停止 sing-box，以减少 64 MB 内存环境中的峰值压力。
+更新核心时，如果 sing-box 正在运行，脚本会先停止服务，以降低更新期间的内存峰值。
 
 常用命令：
 
@@ -160,99 +324,131 @@ rc-service sing-box restart
 
 ```sh
 tail -f /var/log/sing-box/sing-box.log
+```
 
+```sh
 tail -f /var/log/sing-box/error.log
 ```
 
 ---
 
-## 5. 文件与敏感信息位置
+## 8. 文件位置与敏感信息
 
 | 文件 | 用途 |
 |---|---|
-| `/usr/local/bin/sing-box` | sing-box 可执行文件 |
+| `/usr/local/bin/sing-box` | sing-box 二进制 |
 | `/usr/local/etc/sing-box/config.json` | 服务端配置 |
 | `/etc/init.d/sing-box` | OpenRC 服务定义 |
-| `/root/singbox-vless-reality-info.txt` | 生成后的节点信息/VLESS 链接 |
+| `/root/singbox-vless-reality-info.txt` | 节点信息 / VLESS 链接 |
 | `/var/log/sing-box/sing-box.log` | 主日志 |
 | `/var/log/sing-box/error.log` | 错误日志 |
 
-其中 `config.json`、节点信息文件以及 REALITY private key 属于敏感信息，不应提交到 Git 仓库或公开粘贴。
+`config.json`、节点信息文件以及 REALITY private key 都属于敏感数据。
 
 ---
 
-## 6. GitHub Actions：核心同步流程
+## 9. GitHub Actions：核心同步
 
-工作流文件：`.github/workflows/sync-sing-box.yml`
+工作流：
 
-工作流名称：`Sync sing-box Release`
+```text
+.github/workflows/sync-sing-box.yml
+```
 
-### 6.1 触发方式
+工作流名称：
 
-支持两种触发方式：
+```text
+Sync sing-box Release
+```
 
-#### 定时检查
+### 9.1 自动同步
 
-每 6 小时执行一次：
+工作流每 6 小时检查一次官方 sing-box 最新稳定 Release：
 
 ```yaml
 cron: "17 */6 * * *"
 ```
 
-它检查官方 `SagerNet/sing-box` 的最新稳定 Release。
-
-#### 手动执行
-
-通过 `workflow_dispatch` 执行时，可以指定：
-
-- `version`：`latest`、`1.13.21`、`v1.13.21` 等
-- `force`：是否覆盖已经存在的目标 Release
-
-### 6.2 版本映射
-
-工作流的版本转换关系为：
+官方仓库：
 
 ```text
-官方 Release
 SagerNet/sing-box
-        │
-        │ v1.13.21
-        ▼
-本仓库 Release
-v1.13.21-multi
 ```
 
-例如官方版本为 `v1.13.21`，工作流生成的目标 Release tag 为：
+### 9.2 手动同步
+
+支持 `workflow_dispatch`，输入：
 
 ```text
-v1.13.21-multi
+version
 ```
 
-这样可以与官方 Release 清晰区分，同时保持安装脚本的下载地址稳定。
+可以使用：
 
-### 6.3 下载的官方资产
+```text
+latest
+1.13.21
+v1.13.21
+```
 
-工作流首先检查官方 Release 是否存在以下 musl 包：
+以及：
+
+```text
+force=false
+force=true
+```
+
+`force=false`：目标 Release 已存在时跳过。
+
+`force=true`：允许重新上传资产并更新已有 Release。
+
+### 9.3 官方版本到本仓库 Release 的映射
+
+例如官方 Release：
+
+```text
+v1.13.21
+```
+
+同步到本仓库后：
+
+```text
+Tag:
+1.13.21
+
+Release title:
+1.13.21-musl
+```
+
+即：
+
+```text
+官方 SagerNet/sing-box
+v1.13.21
+        │
+        ▼
+本仓库
+1.13.21
+1.13.21-musl
+```
+
+**Tag 与 Release title 是两个独立概念：**
+
+- Tag 用纯版本号，方便下载 URL 简洁稳定。
+- Title 加 `-musl`，明确表示这是本仓库发布的 musl 二进制。
+
+### 9.4 发布资产
+
+工作流只处理 amd64 和 arm64：
+
+官方输入：
 
 ```text
 sing-box-<version>-linux-amd64-musl.tar.gz
 sing-box-<version>-linux-arm64-musl.tar.gz
 ```
 
-然后执行：
-
-1. 下载官方压缩包。
-2. 使用 `gzip -t` 检查 gzip 数据完整性。
-3. 使用 `tar -tzf` 检查 tar 包完整性。
-4. 解压并定位 `sing-box` 二进制。
-5. 重新命名为 `sing-box-amd64` 和 `sing-box-arm64`。
-6. 使用 `file` 检查二进制。
-7. 执行 amd64 二进制的 `version` 命令。
-8. 将实际版本与预期版本比较。
-9. 生成 `SHA256SUMS`。
-10. 创建或更新目标 Release。
-
-最终 Release 包含：
+本仓库最终发布：
 
 ```text
 sing-box-amd64
@@ -260,34 +456,30 @@ sing-box-arm64
 SHA256SUMS
 ```
 
-### 6.4 已存在 Release 时的行为
+工作流不会发布 i386、ARMv7、MIPS 等其他架构。
 
-为了避免定时任务反复修改 Release，工作流默认采用幂等策略：
+### 9.5 同步验证流程
 
-```text
-目标 Release 已存在
-        │
-        ├── force=false → SKIP，不下载、不修改
-        │
-        └── force=true  → 重新上传资产并更新 Release
-```
+工作流依次执行：
 
-工作流使用 `concurrency` 将同步任务限制在同一个组内，并关闭取消进行中的任务，从而避免多个同步任务同时修改同一个 Release。
+1. 解析官方 Release 版本。
+2. 检查官方 amd64/arm64 musl 包是否存在。
+3. 下载官方压缩包。
+4. 使用 `gzip -t` 检查完整性。
+5. 使用 `tar -tzf` 检查 tar 内容。
+6. 解压并定位 `sing-box` 二进制。
+7. 重命名为 `sing-box-amd64` / `sing-box-arm64`。
+8. 使用 `file` 检查二进制。
+9. 执行 amd64 二进制的 `version` 命令。
+10. 将实际版本与目标版本比较。
+11. 生成 `SHA256SUMS`。
+12. 创建或更新本仓库 Release。
 
-工作流需要：
-
-```yaml
-permissions:
-  contents: write
-```
-
-因为它需要创建/更新本仓库 Release。
+Release notes 保持当前工作流生成的内容，不因 Tag/title 命名调整而改变。
 
 ---
 
-## 7. 端到端更新链路
-
-整个项目的版本更新链路如下：
+## 10. 端到端版本更新链路
 
 ```text
 官方 SagerNet/sing-box Release
@@ -302,19 +494,21 @@ GitHub Actions 每 6 小时检查
 下载 → 完整性检查 → 解压
               │
               ▼
-运行 version 验证版本
+生成 sing-box-amd64 / sing-box-arm64
               │
               ▼
-生成 SHA256SUMS
+version 校验 + SHA256SUMS
               │
               ▼
-创建 vX.Y.Z-multi Release
+创建 <版本号> Release
+Title = <版本号>-musl
               │
               ▼
-Alpine 安装脚本读取仓库 Release
+Alpine 安装脚本
               │
-              ▼
-下载对应架构 sing-box 二进制
+              ├── 默认版本 → releases/download/<版本号>/...
+              ├── 指定版本 → releases/download/<版本号>/...
+              └── Latest   → releases/latest/download/...
               │
               ▼
 sing-box version + config check
@@ -323,57 +517,91 @@ sing-box version + config check
 安装/更新 /usr/local/bin/sing-box
               │
               ▼
-OpenRC 启动并执行运行状态检查
+OpenRC 启动并进行运行状态检查
 ```
 
-这个设计把“从上游 Release 获取完整压缩包”和“在 64 MB VPS 上实际运行核心”分离开来，VPS 不需要自行下载、解压官方 tar.gz，也不需要安装额外的构建工具。
+这种设计将“官方压缩包同步”和“64 MB VPS 实际运行”分离。VPS 不需要自行下载、解压官方 tar.gz，也不需要安装构建工具。
 
 ---
 
-## 8. 故障排查
+## 11. 故障排查
 
-### 8.1 核心下载失败
+### 11.1 核心下载失败
 
-先确认服务器可以访问 GitHub Release，并检查：
+检查下载工具：
 
 ```sh
 command -v wget
 command -v curl
 ```
 
-然后手动查看当前脚本使用的 Release URL 是否可访问。
+确认服务器能够访问：
 
-### 8.2 新核心无法通过配置检查
+```text
+https://github.com/opyzzzz/64M-sing-box-vless-vision/releases/
+```
 
-更新流程会执行：
+如果是指定版本，确认 Release Tag 使用的是纯版本号，例如：
+
+```text
+1.13.21
+```
+
+而不是：
+
+```text
+v1.13.21
+v1.13.21-multi
+1.13.21-multi
+```
+
+### 11.2 版本校验失败
+
+查看当前核心：
+
+```sh
+/usr/local/bin/sing-box version
+```
+
+脚本下载新核心后也会自行执行 `version`，如果实际版本与指定版本不一致，会终止更新。
+
+### 11.3 新核心无法通过配置检查
+
+手动执行：
 
 ```sh
 /usr/local/bin/sing-box check -c /usr/local/etc/sing-box/config.json
 ```
 
-如果失败，脚本不会用未通过检查的新核心替换现有核心。优先查看配置内容及 sing-box 版本兼容性。
+检查失败时，不要直接重新生成配置。先确认当前 sing-box 版本与配置格式是否兼容。
 
-### 8.3 服务无法启动
+### 11.4 服务无法启动
 
 执行：
 
 ```sh
 rc-service sing-box status
+```
+
+```sh
 cat /var/log/sing-box/error.log
+```
+
+```sh
 /usr/local/bin/sing-box check -c /usr/local/etc/sing-box/config.json
 ```
 
-如果端口冲突，再检查：
+检查端口：
 
 ```sh
 ss -lntp
 ```
 
-### 8.4 更新后客户端节点失效
+### 11.5 更新后客户端节点失效
 
-如果执行的是“更新配置”而不是“更新核心”，这是预期行为：脚本会重新生成 UUID、REALITY 密钥和 Short ID。
+如果执行的是“更新配置”，UUID、REALITY 密钥和 Short ID 会重新生成，这是正常行为。
 
-重新读取：
+重新查看：
 
 ```sh
 cat /root/singbox-vless-reality-info.txt
@@ -381,34 +609,58 @@ cat /root/singbox-vless-reality-info.txt
 
 然后重新导入新的 VLESS 节点。
 
----
-
-## 9. 维护建议
-
-1. **仅升级核心时，优先使用核心更新功能**，不要重新生成配置。
-2. **升级前确认 VPS 有足够可用内存**；该项目已经针对 64 MB 环境设置了 Go 内存参数并在更新时停止服务，但极低内存环境仍可能受系统状态影响。
-3. **不要把 `/root/singbox-vless-reality-info.txt` 或 `config.json` 提交到仓库**。
-4. **变更 SNI 前先确认目标站点适合作为 REALITY handshake 目标**，并在实际客户端验证连通性。
-5. **定期关注官方 sing-box Release 的兼容性变化**。自动同步只负责二进制发布，不会自动修改服务端配置格式。
-6. **如果需要强制重新同步已经存在的版本**，手动运行工作流并将 `force` 设置为 `true`。
+如果只是执行“更新 sing-box 核心”，正常情况下不会改变上述节点身份参数。
 
 ---
 
-## 10. 当前实现摘要
+## 12. 64 MB VPS 运维注意事项
 
-截至本文编写时，仓库的实现重点为：
+该项目针对约 64 MB RAM 的 Alpine 环境设计。
+
+服务端设置：
+
+```text
+GOMEMLIMIT=32MiB
+GOGC=25
+```
+
+核心更新时会停止 sing-box，以降低下载和替换核心过程中的内存压力。
+
+需要注意：`GOMEMLIMIT` 和 `GOGC` 只影响 sing-box 进程本身，不能限制 `wget`、`curl`、shell 或其他系统进程的内存使用。因此 64 MB 环境仍然可能受到系统整体内存压力影响。
+
+不要将 `VmSize` / `VmPeak` 直接当作实际 RAM 使用量；判断内存压力时应结合 `memory.current`、进程 RSS 以及系统/cgroup OOM 状态综合判断。
+
+---
+
+## 13. 维护建议
+
+1. **只升级核心时使用“更新 sing-box 核心”**，不要通过“更新配置”实现升级。
+2. **不要把 `config.json`、节点信息文件或 REALITY private key 提交到仓库。**
+3. **64 MB VPS 更新核心前尽量保持系统空闲**，避免同时运行不必要的高内存进程。
+4. **修改 SNI / REALITY handshake 前先确认目标站点适合作为 handshake 目标，并实际验证客户端连通性。**
+5. **关注官方 sing-box Release 的配置兼容性变化**；自动同步只负责二进制发布，不会自动修改服务端配置。
+6. **需要重新同步已经存在的版本时**，手动运行 workflow 并设置 `force=true`。
+7. **当前架构范围固定为 amd64 + arm64**，不为其他架构增加额外发布和脚本逻辑。
+
+---
+
+## 14. 当前实现摘要
+
+当前仓库的主要设计：
 
 - Alpine Linux + OpenRC。
 - VLESS + TCP + REALITY + `xtls-rprx-vision`。
 - amd64 / arm64 两种架构。
 - 默认 sing-box `1.13.21`。
-- 本仓库通过 GitHub Actions 同步官方 musl Release。
-- 自动检查下载核心是否可执行。
-- 更新前检查现有配置。
-- 更新配置与更新核心分离。
-- OpenRC 开机启动。
-- 低内存环境下设置 Go 内存参数。
-- GitHub Actions 自动生成 SHA256 校验文件。
-- 已存在 Release 默认跳过，手动 `force=true` 才覆盖。
+- GitHub Actions 从官方 Release 同步 Linux musl 核心。
+- 本仓库 Release Tag 使用纯版本号，例如 `1.13.21`。
+- Release title 使用 `<版本号>-musl`，例如 `1.13.21-musl`。
+- Release 资产为 `sing-box-amd64`、`sing-box-arm64` 和 `SHA256SUMS`。
+- Latest 只指向本仓库最新 Release。
+- 指定版本按纯版本号访问对应 Release。
+- 安装/更新后进行二进制版本校验。
+- 已有配置时，更新核心前使用新核心检查现有配置。
+- 核心更新不会重新生成 UUID、REALITY 密钥和 Short ID。
+- 服务使用 `GOMEMLIMIT=32MiB` 和 `GOGC=25`。
 
-> 版本号、工作流行为和脚本实现可能随仓库后续提交变化；如果本文与代码不一致，应以仓库当前的脚本和 workflow 为准。
+该文档以仓库当前 `main` 分支代码为准；如果脚本或 workflow 后续发生行为变化，应同步更新本文。
