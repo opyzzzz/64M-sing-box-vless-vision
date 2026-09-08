@@ -405,6 +405,118 @@ get_service_state() {
   echo "运行"
 }
 
+status_badge() {
+  state="$1"
+  case "$state" in
+    运行)
+      if [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+        printf '\033[32m● 运行\033[0m'
+      else
+        printf '● 运行'
+      fi
+      ;;
+    停止)
+      if [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+        printf '\033[31m● 停止\033[0m'
+      else
+        printf '● 停止'
+      fi
+      ;;
+    *)
+      if [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+        printf '\033[90m● %s\033[0m' "$state"
+      else
+        printf '● %s' "$state"
+      fi
+      ;;
+  esac
+}
+
+get_sing_box_pid() {
+  if command -v pidof >/dev/null 2>&1; then
+    pidof sing-box 2>/dev/null | awk '{print $1}'
+  else
+    pgrep -x sing-box 2>/dev/null | awk 'NR==1 {print; exit}'
+  fi
+}
+
+get_listen_info() {
+  if [ ! -x "$BIN_DST" ]; then
+    echo "未安装"
+    return 0
+  fi
+
+  listen_info="$(ss -lntp 2>/dev/null | awk '/sing-box/ {print $4; exit}' || true)"
+  if [ -n "$listen_info" ]; then
+    echo "$listen_info"
+  else
+    echo "无"
+  fi
+}
+
+get_info_value() {
+  key="$1"
+  if [ ! -f "$INFO_FILE" ]; then
+    return 0
+  fi
+  awk -F': ' -v key="$key" '$1 == key {print substr($0, length(key) + 3); exit}' "$INFO_FILE"
+}
+
+show_status() {
+  clear 2>/dev/null || true
+
+  current_version="$(get_sing_box_version)"
+  current_state="$(get_service_state)"
+  current_badge="$(status_badge "$current_state")"
+  current_pid="$(get_sing_box_pid)"
+  current_listen="$(get_listen_info)"
+
+  echo "========================================"
+  echo "           sing-box 状态"
+  echo "========================================"
+  echo
+  printf "核心版本    %s\n" "$current_version"
+  printf "运行状态    %s\n" "$current_badge"
+  printf "监听地址    %s\n" "$current_listen"
+  printf "进程 PID    %s\n" "${current_pid:-无}"
+  echo
+  echo "----------------------------------------"
+  echo "          VLESS + REALITY"
+  echo "----------------------------------------"
+
+  if [ -f "$INFO_FILE" ]; then
+    printf "服务器      %s\n" "$(get_info_value 'Address:')"
+    printf "端口        %s\n" "$(get_info_value 'Port:')"
+    printf "UUID        %s\n" "$(get_info_value 'UUID:')"
+    printf "Flow        %s\n" "$(get_info_value 'Flow:')"
+    printf "Network     %s\n" "$(get_info_value 'Network:')"
+    printf "Security    %s\n" "$(get_info_value 'Security:')"
+    printf "SNI         %s\n" "$(get_info_value 'SNI / serverName:')"
+    printf "Handshake   %s\n" "$(get_info_value 'Handshake:')"
+    printf "PublicKey   %s\n" "$(get_info_value 'PublicKey / pbk:')"
+    printf "Short ID    %s\n" "$(get_info_value 'ShortId / sid:')"
+    printf "Fingerprint %s\n" "$(get_info_value 'Fingerprint:')"
+
+    echo
+    echo "----------------------------------------"
+    echo "客户端链接"
+    echo "----------------------------------------"
+    awk '/^Client link:$/ {getline; print; exit}' "$INFO_FILE"
+  else
+    echo "未找到节点信息文件：${INFO_FILE}"
+  fi
+
+  echo
+  echo "----------------------------------------"
+  printf "配置文件    %s\n" "$CONF_FILE"
+  printf "日志文件    %s\n" "$LOG_DIR/sing-box.log"
+  printf "错误日志    %s\n" "$LOG_DIR/error.log"
+  echo "========================================"
+  echo
+  pause
+  clear 2>/dev/null || true
+}
+
 test_and_restart() {
   log "检查 sing-box 配置..."
   "$BIN_DST" check -c "$CONF_FILE"
@@ -547,45 +659,18 @@ update_config_mode() {
   write_info
 }
 
-show_status() {
-  echo
-  echo "=== 状态 ==="
-  echo "版本：$(get_sing_box_version)"
-  echo "状态：$(get_service_state)"
-  echo
-
-  if [ -x "$BIN_DST" ]; then
-    echo "监听："
-    ss -lntp 2>/dev/null | grep sing-box || echo "无"
-  fi
-
-  if [ -f "$INFO_FILE" ]; then
-    echo
-    echo "=== 节点信息 ==="
-    awk '
-      /^sing-box Version:/ {skip=1; next}
-      /^Release:/ {skip=1; next}
-      /^Address:/ {skip=0}
-      skip == 0 {print}
-    ' "$INFO_FILE"
-  else
-    echo
-    warn "未找到节点信息文件：${INFO_FILE}"
-  fi
-  pause
-}
-
 main_menu() {
   while true; do
     clear 2>/dev/null || true
     current_version="$(get_sing_box_version)"
     current_state="$(get_service_state)"
+    current_badge="$(status_badge "$current_state")"
 
     echo "================================"
-    echo " sing-box VLESS + REALITY"
+    echo "     sing-box VLESS + REALITY"
     echo "================================"
     echo "版本：${current_version}"
-    echo "状态：${current_state}"
+    printf "状态：%s\n" "$current_badge"
     echo "--------------------------------"
     echo "1) 安装"
     echo "2) 更新核心"
